@@ -106,7 +106,18 @@ export class TaskScheduler {
 		for (const taskId of this.timers.keys()) {
 			if (!live.has(taskId)) this.#clear(taskId);
 		}
-		for (const task of tasks) this.#arm(task);
+		for (const task of tasks) {
+			await this.#catchUp(task);
+			this.#arm(task);
+		}
+	}
+
+	async #catchUp(task) {
+		if (!task.enabled || !task.nextRunAt) return;
+		if (new Date(task.nextRunAt).getTime() > this.now().getTime()) return;
+		task.nextRunAt = computeNextRunAt(task, this.now());
+		task.updatedAt = this.now().toISOString();
+		await this.store.update(task.id, task);
 	}
 
 	#arm(task) {

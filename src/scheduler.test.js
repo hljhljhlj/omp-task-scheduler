@@ -18,11 +18,9 @@ test("parses interval, once, and cron", () => {
 });
 
 test("cron next run skips the current minute", () => {
-	const next = computeNextRunAt(
-		{ type: "cron", schedule: "15 4 * * *", enabled: true },
-		new Date("2026-11-09T04:15:20Z"),
-	);
-	assert.equal(next, "2026-11-10T04:15:00.000Z");
+	const now = new Date(2026, 10, 9, 4, 15, 20); // local time, cron evaluates in local time
+	const next = computeNextRunAt({ type: "cron", schedule: "15 4 * * *", enabled: true }, now);
+	assert.equal(next, new Date(2026, 10, 10, 4, 15, 0).toISOString());
 });
 
 test("tasks stay inside the session that created them", async () => {
@@ -86,4 +84,37 @@ test("a due interval fires once and schedules the following run", async () => {
 	assert.equal(after.nextRunAt, "2026-11-09T00:01:00.000Z");
 	await scheduler.stop();
 	assert.equal(lock.isAcquired(), false);
+});
+
+test("missed runs are skipped and the next future time is armed", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sched-"));
+	const store = new JsonTaskStore(path.join(dir, "tasks.json"));
+	const lock = new FileSchedulerLock(path.join(dir, "lock"));
+	let clock = new Date("2026-11-09T00:00:00.000Z");
+	const delivered = [];
+	const first = new TaskScheduler({
+		store,
+		lock,
+		sessionId: "session-A",
+		now: () => clock,
+		runner: async (task) => delivered.push(task.prompt),
+	});
+	await first.start();
+	const created = await first.create({ prompt: "ping", schedule: "1m" });
+	await first.stop();
+
+	clock = new Date("2026-11-09T05:00:00.000Z"); // several runs missed during downtime
+	const second = new TaskScheduler({
+		store,
+		lock,
+		sessionId: "session-A",
+		now: () => clock,
+		runner: async (task) => delivered.push(task.prompt),
+	});
+	await second.start();
+	const after = await second.get(created.id);
+	assert.equal(after.nextRunAt, "2026-11-09T05:01:00.000Z");
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	assert.equal(delivered.length, 0); // nothing replayed from the gap
+	await second.stop();
 });
