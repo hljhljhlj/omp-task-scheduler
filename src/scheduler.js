@@ -115,8 +115,20 @@ export class TaskScheduler {
 	async #catchUp(task) {
 		if (!task.enabled || !task.nextRunAt) return;
 		if (new Date(task.nextRunAt).getTime() > this.now().getTime()) return;
-		task.nextRunAt = computeNextRunAt(task, this.now());
+		// A timer already queued for this task will deliver the run; leave it alone.
+		if (this.timers.has(task.id)) return;
 		task.updatedAt = this.now().toISOString();
+		const next = computeNextRunAt(task, this.now());
+		if (next === undefined && task.type === "once") {
+			// The scheduled moment passed while no scheduler was running: never replay it.
+			task.enabled = false;
+			task.lastStatus = "missed";
+			task.lastError = "missed while the scheduler was off";
+			task.nextRunAt = undefined;
+			await this.store.update(task.id, task);
+			return;
+		}
+		task.nextRunAt = next;
 		await this.store.update(task.id, task);
 	}
 

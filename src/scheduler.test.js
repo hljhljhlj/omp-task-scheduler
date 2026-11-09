@@ -120,3 +120,37 @@ test("missed runs are skipped and the next future time is armed", async () => {
 	assert.equal(delivered.length, 0); // nothing replayed from the gap
 	await second.stop();
 });
+
+test("a once task missed while offline is disabled, not left silently enabled", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sched-"));
+	const store = new JsonTaskStore(path.join(dir, "tasks.json"));
+	const lock = new FileSchedulerLock(path.join(dir, "lock"));
+	let clock = new Date("2026-11-09T00:00:00.000Z");
+	const delivered = [];
+	const first = new TaskScheduler({
+		store,
+		lock,
+		sessionId: "session-A",
+		now: () => clock,
+		runner: async (task) => delivered.push(task.prompt),
+	});
+	await first.start();
+	const created = await first.create({ prompt: "once-ping", schedule: "+10m" });
+	await first.stop();
+
+	clock = new Date(new Date(created.nextRunAt).getTime() + 60_000);
+	const second = new TaskScheduler({
+		store,
+		lock,
+		sessionId: "session-A",
+		now: () => clock,
+		runner: async (task) => delivered.push(task.prompt),
+	});
+	await second.start();
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	const task = await second.get(created.id);
+	assert.equal(task.enabled, false);
+	assert.equal(task.lastStatus, "missed");
+	assert.equal(delivered.length, 0);
+	await second.stop();
+});
