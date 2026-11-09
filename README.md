@@ -20,7 +20,7 @@ Session-scoped scheduled prompts for omp. A task runs only in the conversation t
 Install straight from this repository:
 
 ```bash
-omp plugin install https://github.com/hljhljhlj/omp-task-scheduler
+omp plugin install git+https://github.com/hljhljhlj/omp-task-scheduler
 ```
 
 Or clone and link it (better if you want to hack on it):
