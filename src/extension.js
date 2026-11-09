@@ -13,7 +13,7 @@ function sessionFile(sessionId, suffix) {
 }
 
 function summarize(task) {
-	return {
+	const summary = {
 		id: task.id,
 		name: task.name ?? "",
 		schedule: task.schedule,
@@ -24,6 +24,10 @@ function summarize(task) {
 		lastStatus: task.lastStatus ?? null,
 		runCount: task.runCount ?? 0,
 	};
+	if (task.enabled && !task.nextRunAt) {
+		summary.warning = "No upcoming run found within one year; check the cron expression.";
+	}
+	return summary;
 }
 
 export default function taskSchedulerExtension(pi) {

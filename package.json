@@ -1,6 +1,6 @@
 {
   "name": "omp-task-scheduler",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,9 +9,13 @@
   "description": "Session-scoped scheduled tasks for omp. Each task belongs to the conversation that created it.",
   "license": "Apache-2.0",
   "omp": {
-    "extensions": ["./src/extension.js"]
+    "extensions": [
+      "./src/extension.js"
+    ]
   },
   "pi": {
-    "extensions": ["./src/extension.js"]
+    "extensions": [
+      "./src/extension.js"
+    ]
   }
 }

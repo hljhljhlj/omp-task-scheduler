@@ -15,6 +15,8 @@ test("parses interval, once, and cron", () => {
 	assert.equal(once.schedule, "2026-11-09T00:05:00.000Z");
 	assert.equal(resolveSchedule("0 9 * * 1").type, "cron");
 	assert.throws(() => resolveSchedule("nope"));
+	assert.throws(() => resolveSchedule("1s"), /at least 30s/);
+	assert.throws(() => resolveSchedule("2020-01-01T00:00:00Z"), /in the past/);
 });
 
 test("cron next run skips the current minute", () => {

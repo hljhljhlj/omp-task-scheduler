@@ -1,4 +1,5 @@
 const UNIT_SECONDS = { s: 1, m: 60, h: 3600, d: 86400 };
+export const MIN_INTERVAL_SECONDS = 30;
 
 export function resolveSchedule(schedule, now = new Date()) {
 	const raw = String(schedule ?? "").trim();
@@ -6,6 +7,9 @@ export function resolveSchedule(schedule, now = new Date()) {
 	if (interval) {
 		const seconds = Number(interval[1]) * UNIT_SECONDS[interval[2]];
 		if (!Number.isFinite(seconds) || seconds <= 0) throw new Error(`Invalid interval: ${raw}`);
+		if (seconds < MIN_INTERVAL_SECONDS) {
+			throw new Error(`Interval must be at least ${MIN_INTERVAL_SECONDS}s: ${raw}`);
+		}
 		return { type: "interval", schedule: raw, intervalSeconds: seconds };
 	}
 	const relative = raw.match(/^\+(\d+)(s|m|h|d)$/);
@@ -16,6 +20,7 @@ export function resolveSchedule(schedule, now = new Date()) {
 	if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
 		const at = new Date(raw);
 		if (Number.isNaN(at.getTime())) throw new Error(`Invalid timestamp: ${raw}`);
+		if (at.getTime() <= now.getTime()) throw new Error(`Timestamp is in the past: ${raw}`);
 		return { type: "once", schedule: at.toISOString(), intervalSeconds: 0 };
 	}
 	const fields = raw.split(/\s+/);
