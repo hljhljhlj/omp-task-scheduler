@@ -16,4 +16,12 @@ Tools: `scheduler_create`, `scheduler_list`, `scheduler_get`, `scheduler_update`
 
 Commands: `/scheduler-list`, `/scheduler-run-now <taskId>`.
 
-Load it with `omp plugin link --scope project /home/helijun/Project/omp-task-scheduler`, then restart the conversation.
+## Install
+
+```
+omp plugin install git+https://github.com/hljhljhlj/omp-task-scheduler
+```
+
+Or link a local checkout: `omp plugin link --scope user /path/to/omp-task-scheduler`.
+
+Restart the conversation after installing; extensions load at session start.
