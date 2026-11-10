@@ -68,18 +68,18 @@ Cron fields support `*`, lists (`1,15`), ranges (`0-30`), and steps (`*/10`). Wh
 | `scheduler_get` | `taskId` | Read one task, including its full prompt |
 | `scheduler_update` | `taskId`, `prompt?`, `schedule?`, `name?`, `enabled?` | Patch a task |
 | `scheduler_delete` | `taskId` | Delete a task |
-| `scheduler_run_now` | `taskId` | Deliver one run immediately |
+| `scheduler_run_now` | `taskId` | Deliver one run immediately; errors if that task is already running |
 
 Slash commands: `/scheduler-list`, `/scheduler-run-now <taskId>`.
 
-Task summaries expose `id`, `name`, `schedule`, `type`, `enabled`, `nextRunAt`, `lastRunAt`, `lastStatus`, `runCount`. Each task also keeps its last 20 runs (`runHistory`) with status, time, and error.
+Task summaries expose `id`, `name`, `schedule`, `type`, `enabled`, `nextRunAt`, `lastRunAt`, `lastStatus`, `runCount`. Each task also keeps its last 20 runs (`runHistory`) with status (`success`, `error`, `missed`), time, and error.
 
 ## Behavior notes
 
 - **Delivery** — a due task delivers its prompt as the next turn of the owning conversation (`sendMessage` with `triggerTurn`), so the assistant acts on it like user input.
 - **Isolation** — `list`, `get`, `update`, `delete`, and firing all filter by session id; a task from another conversation is invisible. Branching or forking (`session_branch` / `session_fork`) rebinds the scheduler to the new session, so the new conversation does not keep or fire the parent's tasks.
-- **Single active scheduler** — one process per session holds `scheduler.lock-<session-hash>`. Other processes show `scheduler: standby` and retry every 15 s, taking over after the holder exits. Task edits use a separate short-lived lock, so a standby window cannot overwrite the holder's writes.
-- **Downtime** — if omp is closed when a task comes due, nothing is replayed. On restart, interval and cron tasks arm their next future slot; a one-shot whose time already passed is marked `missed` and disabled, not fired.
+- **Single active scheduler** — one process per session holds `scheduler.lock-<session-hash>`. The lock records the holder's pid and process start time, so a pid recycled after a reboot is not mistaken for a live holder. Other processes show `scheduler: standby`, notify once, and retry every 15 s, taking over after the holder exits. Task edits use a separate short-lived lock, so a standby window cannot overwrite the holder's writes.
+- **Downtime** — if omp is closed when a task comes due, nothing is replayed. On restart, interval and cron tasks record the skipped slot as `missed` and arm their next future slot; a one-shot whose time already passed is marked `missed` and disabled, not fired.
 - **One-shots** — disable themselves after delivery, whether it succeeds or throws. Enabling one again requires a schedule that is still in the future. A completed one-shot can be given a new future schedule and re-enabled.
 - **Long intervals** — delays longer than about 23 days are armed in chunks. The task does not fire early when the runtime timer would overflow.
 - **Corrupt task file** — invalid JSON is left untouched. The session stays up and the status line shows `scheduler: error` until the file can be read again.

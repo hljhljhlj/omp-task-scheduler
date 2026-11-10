@@ -41,13 +41,24 @@ export default function taskSchedulerExtension(pi) {
 		return scheduler;
 	};
 
+	let lastUiState;
+
 	const refreshStatus = async (ctx) => {
 		if (!scheduler) return;
-		if (!scheduler.isActive()) {
+		const state = !scheduler.isActive() ? "standby" : scheduler.lastError ? "error" : "active";
+		if (state !== lastUiState) {
+			if (state === "standby") {
+				ctx?.ui?.notify?.("任务调度待命：另一个进程持有本会话的调度锁，15 秒内自动重试", "warning");
+			} else if (state === "error") {
+				ctx?.ui?.notify?.(`任务调度出错：${scheduler.lastError}`, "error");
+			}
+			lastUiState = state;
+		}
+		if (state === "standby") {
 			ctx?.ui?.setStatus?.("scheduler", "scheduler: standby");
 			return;
 		}
-		if (scheduler.lastError) {
+		if (state === "error") {
 			ctx?.ui?.setStatus?.("scheduler", "scheduler: error");
 			return;
 		}
@@ -135,7 +146,13 @@ export default function taskSchedulerExtension(pi) {
 		description: "Deliver one scheduled prompt from this conversation immediately.",
 		parameters: pi.zod.object({ taskId: pi.zod.string() }),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const task = await requireScheduler().runNow(params.taskId);
+			let task;
+			try {
+				task = await requireScheduler().runNow(params.taskId);
+			} catch (error) {
+				await refreshStatus(ctx);
+				return text({ error: error instanceof Error ? error.message : String(error) });
+			}
 			await refreshStatus(ctx);
 			if (!task) return text({ error: "Task not found in this conversation." });
 			return text(summarize(task));
@@ -166,6 +183,7 @@ export default function taskSchedulerExtension(pi) {
 			},
 		});
 		scheduler = next;
+		lastUiState = undefined;
 		await next.start();
 		await refreshStatus(ctx);
 	};
@@ -201,8 +219,12 @@ export default function taskSchedulerExtension(pi) {
 				ctx.ui.notify("用法：/scheduler-run-now <taskId>", "error");
 				return;
 			}
-			const task = await requireScheduler().runNow(taskId);
-			ctx.ui.notify(task ? `已投递 ${task.id}` : "这个对话里没有这个任务", task ? "info" : "error");
+			try {
+				const task = await requireScheduler().runNow(taskId);
+				ctx.ui.notify(task ? `已投递 ${task.id}` : "这个对话里没有这个任务", task ? "info" : "error");
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			}
 		},
 	});
 }
