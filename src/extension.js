@@ -5,11 +5,13 @@ import { FileSchedulerLock } from "./lock.js";
 import { TaskScheduler } from "./scheduler.js";
 import { JsonTaskStore } from "./store.js";
 
-const DATA_DIR = path.join(os.homedir(), ".omp", "scheduler");
+function dataDir() {
+	return process.env.OMP_SCHEDULER_DIR || path.join(os.homedir(), ".omp", "scheduler");
+}
 
 function sessionFile(sessionId, suffix) {
 	const key = createHash("sha256").update(sessionId).digest("hex").slice(0, 24);
-	return path.join(DATA_DIR, `${suffix}-${key}`);
+	return path.join(dataDir(), `${suffix}-${key}`);
 }
 
 function summarize(task) {
@@ -32,6 +34,7 @@ function summarize(task) {
 
 export default function taskSchedulerExtension(pi) {
 	let scheduler = null;
+	let starting = Promise.resolve();
 
 	const requireScheduler = () => {
 		if (!scheduler) throw new Error("Scheduler is not active in this session.");
@@ -40,9 +43,17 @@ export default function taskSchedulerExtension(pi) {
 
 	const refreshStatus = async (ctx) => {
 		if (!scheduler) return;
+		if (!scheduler.isActive()) {
+			ctx?.ui?.setStatus?.("scheduler", "scheduler: standby");
+			return;
+		}
+		if (scheduler.lastError) {
+			ctx?.ui?.setStatus?.("scheduler", "scheduler: error");
+			return;
+		}
 		const tasks = await scheduler.list();
 		const enabled = tasks.filter((task) => task.enabled).length;
-		ctx?.ui?.setStatus?.("scheduler", scheduler.isActive() ? `scheduler: ${enabled}` : "scheduler: standby");
+		ctx?.ui?.setStatus?.("scheduler", `scheduler: ${enabled}`);
 	};
 
 	const text = (value) => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }], details: value });
@@ -89,7 +100,7 @@ export default function taskSchedulerExtension(pi) {
 	pi.registerTool({
 		name: "scheduler_update",
 		label: "Update scheduled task",
-		description: "Change the prompt, schedule, name, or enabled flag of a task in this conversation.",
+		description: "Change the prompt, schedule, name, or enabled flag of a task in this conversation. Re-enabling a one-shot requires a schedule that is still in the future.",
 		parameters: pi.zod.object({
 			taskId: pi.zod.string(),
 			prompt: pi.zod.string().optional(),
@@ -131,18 +142,22 @@ export default function taskSchedulerExtension(pi) {
 		},
 	});
 
-	const bind = async (ctx) => {
+	const bind = async (ctx, { notify = false } = {}) => {
 		if (ctx.agent?.kind && ctx.agent.kind !== "main") return;
 		const sessionId = ctx.sessionManager?.getSessionId?.();
 		if (!sessionId) {
-			ctx.ui?.notify?.("任务调度未启动：这个会话没有 session id", "error");
+			if (notify) ctx.ui?.notify?.("任务调度未启动：这个会话没有 session id", "error");
 			return;
 		}
+		if (scheduler?.sessionId === sessionId && scheduler.isStarted()) return;
 		if (scheduler) await scheduler.stop();
 		const next = new TaskScheduler({
 			store: new JsonTaskStore(`${sessionFile(sessionId, "tasks")}.json`),
 			lock: new FileSchedulerLock(sessionFile(sessionId, "scheduler.lock")),
 			sessionId,
+			onActivity: () => {
+				void refreshStatus(ctx).catch(() => {});
+			},
 			runner: async (task) => {
 				if (ctx.sessionManager.getSessionId() !== task.sessionId) {
 					throw new Error("Scheduled task belongs to a different session.");
@@ -155,9 +170,19 @@ export default function taskSchedulerExtension(pi) {
 		await refreshStatus(ctx);
 	};
 
-	pi.on("session_start", (_event, ctx) => void bind(ctx));
-	pi.on("session_switch", (_event, ctx) => void bind(ctx));
-	pi.on("session_shutdown", () => scheduler?.stop());
+	const enqueueBind = (ctx, options) => {
+		starting = starting.then(() => bind(ctx, options), () => bind(ctx, options));
+		return starting;
+	};
+
+	pi.on("session_start", (_event, ctx) => enqueueBind(ctx, { notify: true }));
+	pi.on("session_switch", (_event, ctx) => enqueueBind(ctx));
+	pi.on("session_branch", (_event, ctx) => enqueueBind(ctx));
+	pi.on("session_fork", (_event, ctx) => enqueueBind(ctx));
+	pi.on("session_shutdown", () => {
+		starting = starting.then(() => scheduler?.stop(), () => scheduler?.stop());
+		return starting;
+	});
 
 	pi.registerCommand("scheduler-list", {
 		description: "List scheduled tasks for this conversation",
