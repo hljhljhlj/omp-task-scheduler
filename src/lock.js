@@ -8,7 +8,7 @@ import path from "node:path";
 export class FileSchedulerLock {
 	constructor(file) {
 		this.path = file;
-		this.token = `${process.pid}:${randomUUID()}`;
+		this.token = `${process.pid}:${processStartTime(process.pid) ?? 0}:${randomUUID()}`;
 		this.acquired = false;
 	}
 
@@ -83,7 +83,7 @@ export class FileSchedulerLock {
 			const content = this.#readContent();
 			if (content === this.token) return "acquired";
 			if (content === undefined) return "retry";
-			if (alive(pidOf(content))) return "busy";
+			if (alive(content)) return "busy";
 			this.#displace(content);
 			return "retry";
 		}
@@ -100,11 +100,11 @@ export class FileSchedulerLock {
 			return;
 		}
 		const content = readContentAt(grave);
-		if (content === expected && !alive(pidOf(content))) {
+		if (content === expected && !alive(content)) {
 			fs.rmSync(grave, { recursive: true, force: true });
 			return;
 		}
-		if (alive(pidOf(content))) {
+		if (alive(content)) {
 			try {
 				fs.renameSync(grave, this.path);
 			} catch {
@@ -137,13 +137,43 @@ function pidOf(content) {
 	return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
-function alive(pid) {
+function startOf(content) {
+	const parts = String(content ?? "").split(":");
+	if (parts.length < 3) return undefined;
+	const start = Number(parts[1]);
+	return Number.isInteger(start) && start >= 0 ? start : undefined;
+}
+
+// A live pid alone is not proof that the lock holder is still the same process:
+// after a reboot the pid can be recycled by an unrelated program. Tokens written
+// by this version carry the holder's start time and are only treated as live
+// when both match. Tokens from older versions carry no start time and fall back
+// to the pid check.
+function alive(content) {
+	const pid = pidOf(content);
 	if (!Number.isInteger(pid) || pid <= 0) return false;
 	try {
 		process.kill(pid, 0);
-		return true;
 	} catch (error) {
 		// EPERM means the process exists but belongs to another user.
-		return error?.code === "EPERM";
+		if (error?.code !== "EPERM") return false;
+	}
+	const recorded = startOf(content);
+	if (recorded === undefined) return true;
+	const current = processStartTime(pid);
+	return current === undefined || current === recorded;
+}
+
+function processStartTime(pid) {
+	if (!Number.isInteger(pid) || pid <= 0) return undefined;
+	try {
+		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+		const close = stat.lastIndexOf(")");
+		if (close < 0) return undefined;
+		const fields = stat.slice(close + 2).trim().split(/\s+/);
+		const start = Number(fields[19]);
+		return Number.isInteger(start) && start > 0 ? start : undefined;
+	} catch {
+		return undefined;
 	}
 }

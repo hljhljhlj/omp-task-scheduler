@@ -120,6 +120,9 @@ test("missed runs are skipped and the next future time is armed", async () => {
 	await second.start();
 	const after = await second.get(created.id);
 	assert.equal(after.nextRunAt, "2026-11-09T05:01:00.000Z");
+	assert.equal(after.lastStatus, "missed");
+	assert.equal(after.runHistory.at(-1).status, "missed");
+	assert.equal(after.runHistory.at(-1).at, "2026-11-09T00:01:00.000Z");
 	await new Promise((resolve) => setTimeout(resolve, 30));
 	assert.equal(delivered.length, 0); // nothing replayed from the gap
 	await second.stop();
@@ -272,7 +275,10 @@ test("concurrent runNow delivers a task once", async () => {
 	try {
 		await scheduler.start();
 		const created = await scheduler.create({ prompt: "ping", schedule: "30s" });
-		await Promise.all([scheduler.runNow(created.id), scheduler.runNow(created.id)]);
+		const results = await Promise.allSettled([scheduler.runNow(created.id), scheduler.runNow(created.id)]);
+		assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+		const rejected = results.find((result) => result.status === "rejected");
+		assert.match(rejected.reason.message, /already running/);
 		assert.equal(maxActive, 1);
 		assert.deepEqual(delivered, ["ping"]);
 		assert.equal((await scheduler.get(created.id)).runCount, 1);
@@ -441,6 +447,22 @@ test("a live lock is not stolen and a dead pid file is replaced by one holder", 
 		assert.equal(taken.holderPid(), process.pid);
 		taken.release();
 		assert.equal(fs.existsSync(stalePath), false);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a lock whose pid was recycled by another process is treated as stale", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sched-"));
+	try {
+		const lockPath = path.join(dir, "recycled");
+		const probe = new FileSchedulerLock(lockPath);
+		const [pid, , uuid] = probe.token.split(":");
+		fs.mkdirSync(lockPath);
+		fs.writeFileSync(path.join(lockPath, "pid"), `${pid}:1:${uuid}\n`);
+		const lock = new FileSchedulerLock(lockPath);
+		assert.equal(lock.acquire(), true);
+		lock.release();
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

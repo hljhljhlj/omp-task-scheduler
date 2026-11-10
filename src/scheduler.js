@@ -103,7 +103,8 @@ export class TaskScheduler {
 	async runNow(taskId) {
 		const task = await this.get(taskId);
 		if (!task) return undefined;
-		await this.#execute(task, true);
+		const outcome = await this.#execute(task, true);
+		if (outcome === "busy") throw new Error(`Task ${taskId} is already running.`);
 		return this.get(taskId);
 	}
 
@@ -190,20 +191,19 @@ export class TaskScheduler {
 		const past = !Number.isFinite(due) || due <= this.now().getTime();
 		if (!past) return;
 		if (task.type !== "once" && !task.nextRunAt) return;
-		task.updatedAt = this.now().toISOString();
+		const missedAt = task.nextRunAt ?? task.schedule;
 		const next = computeNextRunAt(task, this.now());
-		if (next === undefined && task.type === "once") {
+		if (next === undefined && task.type !== "once") return;
+		task.updatedAt = this.now().toISOString();
+		task.lastStatus = "missed";
+		task.lastError = "missed while the scheduler was off";
+		task.runHistory = [...(task.runHistory ?? []), { status: "missed", at: missedAt, error: task.lastError }].slice(-HISTORY_LIMIT);
+		if (next === undefined) {
 			task.enabled = false;
 			task.nextRunAt = undefined;
-			if (!task.lastStatus) {
-				task.lastStatus = "missed";
-				task.lastError = "missed while the scheduler was off";
-			}
-			await this.store.update(task.id, task);
-			return;
+		} else {
+			task.nextRunAt = next;
 		}
-		if (next === undefined) return;
-		task.nextRunAt = next;
 		await this.store.update(task.id, task);
 	}
 
@@ -263,28 +263,30 @@ export class TaskScheduler {
 	}
 
 	async #execute(task, manual) {
-		if (!task?.id || this.running.has(task.id)) return;
+		if (!task?.id) return "missing";
+		if (this.running.has(task.id)) return "busy";
 		this.running.add(task.id);
 		const generation = this.generation;
 		try {
 			const fresh = await this.get(task.id);
-			if (generation !== this.generation) return;
-			if (!fresh || fresh.sessionId !== this.sessionId) return;
+			if (generation !== this.generation) return "stopped";
+			if (!fresh || fresh.sessionId !== this.sessionId) return "missing";
 			if (!manual && this.lock.owns && !this.lock.owns()) {
 				this.lock.abandon?.();
 				this.active = false;
-				return;
+				return "lost-lock";
 			}
-			if (!manual && (!fresh.enabled || !this.active)) return;
+			if (!manual && (!fresh.enabled || !this.active)) return "skipped";
 			const started = this.now().toISOString();
 			try {
 				await this.runner(fresh);
 			} catch (error) {
-				if (generation !== this.generation) return;
+				if (generation !== this.generation) return "stopped";
 				await this.#finish(fresh.id, "error", started, errorText(error), generation);
-				return;
+				return "error";
 			}
 			await this.#finish(fresh.id, "success", started, undefined, generation);
+			return "delivered";
 		} finally {
 			this.running.delete(task.id);
 		}
