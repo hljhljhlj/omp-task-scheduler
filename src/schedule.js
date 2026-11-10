@@ -15,7 +15,10 @@ export function resolveSchedule(schedule, now = new Date()) {
 	const relative = raw.match(/^\+(\d+)(s|m|h|d)$/);
 	if (relative) {
 		const seconds = Number(relative[1]) * UNIT_SECONDS[relative[2]];
-		return { type: "once", schedule: new Date(now.getTime() + seconds * 1000).toISOString(), intervalSeconds: 0 };
+		if (!Number.isFinite(seconds) || seconds <= 0) throw new Error(`Invalid interval: ${raw}`);
+		const at = new Date(now.getTime() + seconds * 1000);
+		if (Number.isNaN(at.getTime())) throw new Error(`Invalid interval: ${raw}`);
+		return { type: "once", schedule: at.toISOString(), intervalSeconds: 0 };
 	}
 	if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
 		const at = new Date(raw);
@@ -24,10 +27,12 @@ export function resolveSchedule(schedule, now = new Date()) {
 		return { type: "once", schedule: at.toISOString(), intervalSeconds: 0 };
 	}
 	const fields = raw.split(/\s+/);
-	if (fields.length === 5 || fields.length === 6) {
-		const cron = fields.length === 6 ? fields.slice(1).join(" ") : raw;
-		parseCron(cron);
-		return { type: "cron", schedule: cron, intervalSeconds: 60 };
+	if (fields.length === 6) {
+		throw new Error(`Six-field cron is not supported (no seconds field): ${raw}`);
+	}
+	if (fields.length === 5) {
+		parseCron(raw);
+		return { type: "cron", schedule: raw, intervalSeconds: 60 };
 	}
 	throw new Error(`Unrecognized schedule "${raw}". Use 30s, 10m, 6h, 1d, +5m, an ISO timestamp, or a 5-field cron.`);
 }
@@ -35,7 +40,6 @@ export function resolveSchedule(schedule, now = new Date()) {
 export function computeNextRunAt(task, now = new Date()) {
 	if (!task.enabled) return undefined;
 	if (task.type === "once") {
-		if ((task.runCount ?? 0) > 0) return undefined;
 		const at = new Date(task.schedule);
 		if (Number.isNaN(at.getTime()) || at.getTime() <= now.getTime()) return undefined;
 		return at.toISOString();
